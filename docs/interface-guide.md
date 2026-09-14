@@ -88,6 +88,10 @@ class MyToolInvoker : HarnessToolInvoker {
   三者审计语义与对模型的提示措辞不同。
 - 任何异常路径视为拒绝（fail-closed），`request` 永不抛异常。
 - 只有 `ConfirmDecision.ALLOWED.isAllowed == true` 才放行。
+- **执行入口**（MengPaw 侧）：`AgentToolRunner` → `RiskGate.evaluate(..., confirmGate = engine.harnessEnv.confirmGate)`。
+  注意只有 **HIGH 级**命令会走到确认门；MID 级（如 `agent.memory.rm`）只查权限等级，
+  LOW 级直接放行 —— 写测试时选 HIGH 级命令（`clipboard.clear` / `proc.exec` / `root.*`），
+  否则断言"门被调用"会失败。另：表内 HIGH 命令需带 `reason` 才过 `HighRiskCommandGate`。
 
 ### 3.5 `HarnessToolInvoker`
 - **不抛异常**：失败用 `HarnessToolResult.fail(...)` 表达。唯一例外是 `CancellationException`
