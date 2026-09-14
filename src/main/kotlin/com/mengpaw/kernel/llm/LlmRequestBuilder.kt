@@ -88,7 +88,7 @@ enum class CacheStrategy {
  * AdaptiveLlmProvider / RemoteApi 的 buildRequestBody (首条消息 role=system)。
  * 与 PromptEngine 的 mtime 指纹缓存互补: 后者保证组装结果稳定, 这里实测 wire 形状。
  */
-internal object SystemPromptShape {
+object SystemPromptShape {
     @Volatile private var lastHash: String? = null
     @Volatile private var lastLen: Int = -1
 

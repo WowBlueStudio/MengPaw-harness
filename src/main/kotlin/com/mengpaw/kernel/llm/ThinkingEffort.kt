@@ -44,5 +44,5 @@ enum class ThinkingEffort(val wire: String, val label: String, val thinkEnabled:
  * 官方文档仅 DeepSeek 记载 `thinking` / `reasoning_effort` (OpenAI 官方 chat/completions
  * 未记载该字段), 对其它厂商注入会 400 或被忽略。
  */
-internal fun effectiveThinkingEffort(providerType: String, effort: ThinkingEffort): ThinkingEffort? =
+fun effectiveThinkingEffort(providerType: String, effort: ThinkingEffort): ThinkingEffort? =
     if (providerType == "deepseek") effort else null

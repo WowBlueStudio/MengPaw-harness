@@ -34,7 +34,7 @@ import kotlinx.serialization.json.jsonPrimitive
  * @param requestStart 请求起始毫秒时间戳 (P2-12 遥测耗时锚点 — 调用方传入)
  * @return 完整拼接的可见内容文本
  */
-internal suspend fun consumeSseStream(
+suspend fun consumeSseStream(
     response: HttpResponse,
     onToken: (String) -> Unit,
     requestStart: Long,
@@ -221,7 +221,7 @@ internal suspend fun consumeSseStream(
  * 流内错误的状态码映射 (v0.46.3): 保留限流/过载的可重试语义, 其余按 400 —
  * 400/401/403 在 [AdaptiveLlmProvider] 的 NON_RETRYABLE_STATUSES 中, 直通用户, 不再白重试 6 次。
  */
-internal fun streamErrorStatus(message: String): Int {
+fun streamErrorStatus(message: String): Int {
     val m = message.lowercase()
     return when {
         "rate limit" in m || "429" in m || "too many requests" in m -> 429

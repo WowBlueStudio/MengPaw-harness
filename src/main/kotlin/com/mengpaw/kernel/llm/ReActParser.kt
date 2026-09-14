@@ -20,7 +20,7 @@ class ReActParser {
      * 3. If NEITHER marker present (non-ReAct model / natural response) → treat as final answer
      * 4. If "Thought:" only (no action, no final) → also treat as final answer
      */
-    internal fun parse(text: String): ReActResponse {
+    fun parse(text: String): ReActResponse {
         val normalized = text.trim()
 
         // Find all marker positions (case-insensitive, Chinese/English colon)
@@ -147,9 +147,11 @@ class ReActParser {
     /**
      * 退化输出检测 (v0.37.3) — 模型卡在重复生成同一标记/标签 (如 `<Action><Action>…`)
      * 或极低多样性 token 流时返回 true, 上层不应把这类垃圾当最终答案。
-     * internal 为测试可见性。
+     *
+     * 公开理由: 宿主在"最终答案门禁"处需独立调用 (见 AgentReActStepProcessor);
+     * 跨模块 (harness -> kernel) 调用要求 public。
      */
-    internal fun isDegenerateOutput(text: String): Boolean {
+    fun isDegenerateOutput(text: String): Boolean {
         val t = text.trim()
         if (t.length < 40) return false
         // 连续重复同一 XML 标签 ≥ 3 次

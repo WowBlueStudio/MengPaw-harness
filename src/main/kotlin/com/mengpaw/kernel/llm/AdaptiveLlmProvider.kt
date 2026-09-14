@@ -26,7 +26,7 @@ class AdaptiveLlmProvider(
     private val apiKey: String,
     private val model: String = "gpt-4.1",
     // 默认配置按端点自适应 (DeepSeek 思考模式默认开启 → 需更大的输出上限, 见 forEndpoint)
-    internal val config: AdaptiveConfig = AdaptiveConfig.forEndpoint(apiEndpoint),
+    val config: AdaptiveConfig = AdaptiveConfig.forEndpoint(apiEndpoint),
     /**
      * 思考强度档位 (v0.46.2, DeepSeek Max/High/Low/Off 四档) — 仅 DeepSeek 端点生效
      * (经 [effectiveThinkingEffort] 过滤); 默认 [ThinkingEffort.DEFAULT] = 官方默认 high。

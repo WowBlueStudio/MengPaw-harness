@@ -27,7 +27,7 @@ import io.ktor.client.engine.cio.*
  *
  * 单例不 close — 进程生命周期共享, provider.close() 为 no-op。
  */
-internal object LlmHttpClient {
+object LlmHttpClient {
     /** 默认引擎; 宿主若需替换 (如 Ktor 的其它引擎), 用 [withEngine] 构造。 */
     val ktor: HttpClient = HttpClient(CIO) {
         engine {
