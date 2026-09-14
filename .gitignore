@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 深圳哇蓝文化科技有限公司 (ShenZhen wowblue culture and technology CO.,LTD.)
+# SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Commercial
+
+# ── Gradle ──
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+# ── IDE ──
+.idea/
+*.iml
+.kotlin/
+# ── OS ──
+.DS_Store
+Thumbs.db
+# ── 本地验证产物 ──
+/local-test-data/
