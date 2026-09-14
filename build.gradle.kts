@@ -21,8 +21,15 @@ dependencies {
     // 工具调用/会话协议的对外序列化
     api("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
+    // ── LLM 客户端传输层 ──
+    // 引擎选 CIO 而非 OkHttp: 纯 Kotlin 实现, 无 JVM-only 依赖 (okhttp3 + java.util.concurrent),
+    // KMP 各目标可用。宿主若需换引擎, 用 LlmHttpClient.withEngine(...) 或自建 HttpClient。
+    implementation("io.ktor:ktor-client-core:3.0.3")
+    implementation("io.ktor:ktor-client-cio:3.0.3")
+
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+    testImplementation("io.ktor:ktor-client-mock:3.0.3")
 }
 
 /**
