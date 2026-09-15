@@ -62,7 +62,11 @@ object BuiltinTools {
         FileList(env),
         FileGlob(env, globLimit),
         EnvGet(),
-        HttpGet(env)
+        HttpGet(env),
+        // 进程执行 — **默认关闭**: 已注册 (模型可见并知道如何请求开启),
+        // 但调用时一律拒绝并返回开启指引, 直到 ShellRunTool.enable() 或
+        // 环境变量 MENGPaw_ALLOW_SHELL=true。详见 ShellRunTool 类文档。
+        ShellRunTool.create(env)
     )
 
     // ── 路径安全 ────────────────────────────────────────────────

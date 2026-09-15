@@ -89,7 +89,17 @@ data class ToolOutcome(
  * 并发映射保护。
  *
  * @param env 平台环境 — 工具经此访问文件系统与确认门 (而非直接碰平台 API)
- * @param confirmGate 高危工具确认门; 传 null 表示不设门禁 (调用方自担)
+ * @param confirmGate **可选的第二道防线** — 仅在宿主显式传入时才生效。
+ *
+ * ## 关于高危工具与确认门 (设计澄清, 2026-08-21)
+ * 风险等级 (`riskLevel == "high"`) 本身**不触发**任何拦截 —— 它只是元数据, 供提示词
+ * 警示与宿主自行决策。真正的门禁有两处, 二者独立:
+ * 1. **工具自身的开关** — 如 [ShellRunTool] 默认关闭, 未开启时一律拒绝 (这是主门)
+ * 2. **本注册表的 [confirmGate]** — 宿主显式传入时, 高危工具每次执行都需批准
+ *
+ * 刻意**不**默认取 `env.confirmGate`: 否则无 UI 宿主 (CLI/CI/后台) 的默认
+ * `DenyAllConfirmGate` 会让所有高危工具永久不可用 —— 即使用户已显式开启该工具。
+ * 需要额外确认保护的宿主应显式传入, 例如 `ToolRegistry(env, env.confirmGate)`。
  */
 class ToolRegistry(
     private val env: HarnessEnv,
@@ -145,9 +155,10 @@ class ToolRegistry(
                 errorCode = ERR_UNKNOWN_TOOL
             )
 
-        // 高危工具二次确认 (fail-closed: 无用户可问即拒绝)
-        if (tool.riskLevel == "high") {
-            val gate = confirmGate ?: env.confirmGate
+        // 高危工具的**可选**二次确认 — 仅当宿主显式传入 confirmGate 时生效。
+        // 未传入 = 不做确认 (工具自身的开关才是主门; 见类文档「关于高危工具与确认门」)。
+        val gate = confirmGate
+        if (tool.riskLevel == "high" && gate != null) {
             val decision = gate.request(
                 command = tool.name,
                 reason = request.raw,
