@@ -72,37 +72,57 @@ object BuiltinTools {
      *
      * 模型可能生成 `../../etc/passwd` 之类路径, 故此处是硬边界而非建议:
      * 相对路径按 `baseDir` 解析, 绝对路径必须落在 `baseDir` 内。
+     *
+     * **平台差异处理 (PC 三端必需)**: 绝对路径有两种形态 —
+     * POSIX `/a/b`, Windows `C:/a/b` (或 `C:\a\b`)。后者若无盘符识别, 会被误当相对路径
+     * 拼到 baseDir 之后 (写入失败), 且**越界的 Windows 绝对路径会绕过工作目录检查** —
+     * 实测缺陷, 2026-08-21 由 PlatformSupportTest 捕获并修复。
      */
     private fun resolveInside(env: HarnessEnv, raw: String): String {
-        val base = env.paths.baseDir.trimEnd('/')
+        val base = normalize(env.paths.baseDir.trimEnd('/').replace('\\', '/'))
         val cleaned = raw.trim().removeSurrounding("\"").removeSurrounding("'")
+            .replace('\\', '/')
         if (cleaned.isEmpty()) throw ToolArgsException("路径为空")
         val normalized = normalize(cleaned)
-        val absolute = if (normalized.startsWith("/")) normalized else "$base/$normalized"
-        val resolved = normalize(absolute)
-        if (resolved != base && !resolved.startsWith("$base/")) {
+        val absolute = if (isAbsolute(normalized) || isAbsolute(cleaned)) {
+            normalized
+        } else {
+            normalize("$base/$normalized")
+        }
+        if (absolute != base && !absolute.startsWith("$base/")) {
             throw ToolArgsException("路径越出工作目录: '$raw' (仅允许 $base 之内)")
         }
-        return resolved
+        return absolute
     }
 
-    /** 折叠 `.` 与 `..` 段 (不依赖平台路径 API, 保持跨平台一致)。 */
+    /** 绝对路径判定 — 兼容 POSIX 前缀与 Windows 盘符 (`C:/`)。 */
+    private fun isAbsolute(path: String): Boolean =
+        path.startsWith("/") || Regex("^[A-Za-z]:/").containsMatchIn(path)
+
+    /**
+     * 折叠 `.` 与 `..` 段 (不依赖平台路径 API, 保持跨平台一致)。
+     * 盘符段 (`C:`) 视为不可回退的根, 防 `C:/..` 逃逸。
+     */
     private fun normalize(path: String): String {
+        val unixStyle = path.replace('\\', '/')
         val out = ArrayDeque<String>()
-        val trailingSlash = path.length > 1 && path.endsWith("/")
-        for (segment in path.split("/")) {
+        val trailingSlash = unixStyle.length > 1 && unixStyle.endsWith("/")
+        for (segment in unixStyle.split("/")) {
             when (segment) {
                 "", "." -> Unit
-                ".." -> if (out.isNotEmpty() && out.last() != "..") out.removeLast() else out.addLast("..")
+                ".." -> if (out.isNotEmpty() && out.last() != ".." && !isDriveSegment(out.last())) out.removeLast()
                 else -> out.addLast(segment)
             }
         }
         val joined = out.joinToString("/")
         return when {
-            path.startsWith("/") -> if (trailingSlash && joined.isNotEmpty()) "/$joined/" else "/$joined"
+            unixStyle.startsWith("/") -> if (trailingSlash && joined.isNotEmpty()) "/$joined/" else "/$joined"
             else -> joined
         }
     }
+
+    /** 盘符段 (`C:`) — 折叠 `..` 时不得被弹出。 */
+    private fun isDriveSegment(segment: String): Boolean = Regex("^[A-Za-z]:$").matches(segment)
 
     // ── 工具实现 ────────────────────────────────────────────────
 

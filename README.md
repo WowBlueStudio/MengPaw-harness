@@ -104,6 +104,86 @@ class MyStore : Conversation {
 }
 ```
 
+## 平台支持
+
+**当前路线：PC 三端优先（JVM）。** 桌面三端各有官方 JDK 17，因此**同一份产物在三端均可运行**——
+这是 JVM 路线的核心价值：不需要为每个平台重新编译，也无需交叉编译工具链。
+
+| 平台 | 路径 | 状态 |
+|---|---|---|
+| **Windows** | JVM | ✅ **已支持** |
+| **macOS** | JVM (Intel / Apple Silicon 均有官方 JDK) | ✅ **已支持** |
+| **Linux** | JVM (glibc / musl 均可) | ✅ **已支持** |
+| iOS | Kotlin/Native (darwin 源集) | ⏸️ 暂缓（能力受限，见下） |
+| OpenHarmony 标准系统 | Kotlin/Native (linuxArm64) → `.so` → NAPI | ⏸️ 暂缓（需自建工具链） |
+| 鸿蒙 LiteOS-M | — | ❌ 不适用（不适合本运行时） |
+
+`PlatformSupportTest` 会在**构建时真实执行**路径、文件系统、时钟、工具链验证——
+覆盖绝对/相对路径、两种分隔符形态、越界拒绝。要在某平台确认可用性，
+在该机器（或 CI 矩阵）上跑 `./gradlew test` 即可，**无需改代码**。
+
+### Linux 评估结论
+
+Linux 与 Windows/macOS 走同一条 JVM 路线，**无需任何代码改动**即可运行：
+
+- ✅ 构建、测试、运行全通（`./gradlew check`，JDK 17）
+- ✅ 路径语义原生匹配 —— 内置工具的路径归一化按 POSIX 语义实现，Linux/macOS 是"原生正确"路径
+- ✅ 文件系统、时钟、环境变量、HTTP 工具均与桌面其它两端口径一致
+- ✅ 无 Android 依赖、无平台特权要求
+- ⚠️ 注意：本库**暂未内置进程执行工具**（`shell.run` 之类）。宿主若需该能力，应自行注册
+  `HarnessTool` 并配套自己的确认门 —— 这是刻意的安全取舍（见「设计取舍」）
+
+### 若要在 iOS / OpenHarmony 上运行
+
+以下工作**未完成**，此处明确列出供后续评估，避免误以为当前产物可直接移植。
+
+**通用前提**：把构建从 `kotlin("jvm")` 改为 `kotlin("multiplatform")`，源集按
+`commonMain`（现接口层 + 引擎，已是零平台类型）/ `jvmMain`（现实现原样搬）/ `darwinMain` / `linuxMain` 拆分。
+
+**iOS**（基础工作约 2-4 周）
+
+1. `darwinMain` 实现 `HarnessFileSystem`（`NSFileManager` + `NSData`）与 `HarnessClock`（`NSDate`）
+2. HTTP 引擎由 CIO 换为 `ktor-client-darwin`
+3. 打包 XCFramework，经 Swift `async/await` 或 Objective-C 桥接调用
+4. **必须在产品层接受的能力边界**：
+   - `ProcessBuilder` 不可用 → **无法执行外部命令**（Agent 最常用的能力）
+   - 动态代码加载被禁 → **插件体系失效**
+   - 文件系统沙箱隔离 → 只能读写 App 自己的沙箱
+   - 后台执行严格受限 → 长任务会被挂起
+   - 结论：iOS 上得到的是"沙箱内的 ReAct 客户端"，而非桌面等价物
+
+**OpenHarmony 标准系统**（先做 3 天可行性探针，再决定是否投入）
+
+1. 探针须先验证三件事：Kotlin/Native `linuxArm64` 产物能否被 NAPI 加载；
+   无 JVM 环境下 KN 运行时（TLS / 线程 / 内存模型）是否正常；`Dispatchers.Default` 能否工作
+2. 交叉编译工具链（Kotlin/Native **没有官方 OpenHarmony 支持**，需自建）
+3. `HarmonyHarnessFileSystem`（OH 文件 API 或 POSIX）
+4. NAPI 桥接层 + ArkTS 侧宿主
+5. HTTP 无官方 Ktor 引擎 —— 需自实现或用 cinterop 调系统网络 API
+6. 风险：上述任一条不通则整条路线不成立，故**先探针后投入**
+
+**鸿蒙 LiteOS-M 不适用**：它面向 MCU / KB 级内存的 IoT 设备，C 语言开发，
+连 JVM 都无法运行，更承载不了 Kotlin/Native 运行时。**若目标是"让 Agent 控制鸿蒙设备"，
+正确解法不是移植运行时**，而是让 Harness 运行在手机 / 平板 / PC 侧，把设备当作被控端
+（经 ACP 之类的协议下沉受控指令）。
+
+### 迁移到更多平台的实际工作量
+
+抽象层已就位，平台相关调用很少 —— 这是当初把接口切在这个位置的价值：
+
+| 位置 | 平台调用点 |
+|---|---|
+| `harness/` 接口层 | 0（仅注释中提及） |
+| `harness/jvm/` 实现层 | 16 |
+| `harness/engine` + `harness/tool` | 4 |
+| `com.mengpaw.kernel.llm` 模型层 | 13 |
+| **合计** | **~33 处 / 13 类 API** |
+
+**但真正的缺口不在"接口够不够"，而在"接口有没有接上"**：`com.mengpaw.kernel` 核心子集里
+仍有约 84 处平台调用**直接**访问 `java.io.File` / `System.currentTimeMillis` 而未经注入。
+这部分在 JVM 三端上完全无碍（所以 PC 支持成立），但要编译到 iOS/鸿蒙则必须先接通——
+工作量约 2-4 天，且不依赖任何平台决策，是任何多平台化路线的前置步骤。
+
 ## 设计取舍
 
 这是**库**而不是框架，几处刻意的克制：
