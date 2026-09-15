@@ -4,11 +4,34 @@
 plugins {
     kotlin("jvm") version "2.0.21"
     kotlin("plugin.serialization") version "2.0.21"
+    `maven-publish`
 }
 
-// 单一事实源: 与 MengPaw 主仓库对齐 (发布时以 git tag 覆盖)
-group = "com.github.WowBlueStudio.MengPaw-Harness"
-version = "0.1.0"
+// 发布坐标 — JitPack 以 git tag 覆盖版本; group 由设置处统一下发
+group = providers.gradleProperty("harness.group").orElse("com.github.WowBlueStudio.MengPaw-Harness").get()
+version = providers.gradleProperty("harness.version").orElse("0.1.0").get()
+
+// ── 发布配置 (JitPack / 本地 mavenLocal) ──────────────────────────────
+// 与 MengPaw 主仓库 mengpaw-kernel 保持同一套发布方式 (那套已在 JitPack 验证可用),
+// 降低两仓库的发布差异面。发布纪律: tag / push 需用户明确指令, 不得自行发版。
+publishing {
+    publications {
+        create<MavenPublication>("maven") {
+            from(components["java"])
+            pom {
+                name.set("MengPaw Harness")
+                description.set("跨平台 Agent Harness 核心 — ReAct 循环 / 平台抽象层 / 工具协议")
+                url.set("https://github.com/WowBlueStudio/MengPaw-Harness")
+                licenses {
+                    license {
+                        name.set("AGPL-3.0-or-later OR LicenseRef-Commercial")
+                        url.set("https://www.gnu.org/licenses/agpl-3.0.html")
+                    }
+                }
+            }
+        }
+    }
+}
 
 kotlin {
     jvmToolchain(17)
