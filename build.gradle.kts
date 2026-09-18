@@ -8,8 +8,8 @@ plugins {
 }
 
 // 发布坐标 — JitPack 以 git tag 覆盖版本; group 由设置处统一下发
-group = providers.gradleProperty("harness.group").orElse("com.github.WowBlueStudio.MengPaw-harness").get()
-version = providers.gradleProperty("harness.version").orElse("0.1.0").get()
+group = providers.gradleProperty("harness.group").orElse("com.github.WowBlueStudio").get()
+version = providers.gradleProperty("harness.version").orElse("0.1.1").get()
 
 // ── 发布配置 (JitPack / 本地 mavenLocal) ──────────────────────────────
 // 与 MengPaw 主仓库 mengpaw-kernel 保持同一套发布方式 (那套已在 JitPack 验证可用),

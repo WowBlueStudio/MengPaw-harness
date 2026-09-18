@@ -30,8 +30,8 @@ println(result.answer)
 ## 部署
 
 ```kotlin
-// JitPack (待推送到 GitHub 并打 tag 后可用)
-implementation("com.github.WowBlueStudio.MengPaw-harness:mengpaw-harness:<tag>")
+// JitPack (坐标规则: com.github.<用户>:<仓库名>:<tag>)
+implementation("com.github.WowBlueStudio:MengPaw-harness:<tag>")
 ```
 
 要求 JDK 17。
