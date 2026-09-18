@@ -31,7 +31,7 @@ println(result.answer)
 
 ```kotlin
 // JitPack (待推送到 GitHub 并打 tag 后可用)
-implementation("com.github.WowBlueStudio.MengPaw-Harness:mengpaw-harness:<tag>")
+implementation("com.github.WowBlueStudio.MengPaw-harness:mengpaw-harness:<tag>")
 ```
 
 要求 JDK 17。

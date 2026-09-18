@@ -8,7 +8,7 @@ plugins {
 }
 
 // 发布坐标 — JitPack 以 git tag 覆盖版本; group 由设置处统一下发
-group = providers.gradleProperty("harness.group").orElse("com.github.WowBlueStudio.MengPaw-Harness").get()
+group = providers.gradleProperty("harness.group").orElse("com.github.WowBlueStudio.MengPaw-harness").get()
 version = providers.gradleProperty("harness.version").orElse("0.1.0").get()
 
 // ── 发布配置 (JitPack / 本地 mavenLocal) ──────────────────────────────
@@ -21,7 +21,7 @@ publishing {
             pom {
                 name.set("MengPaw Harness")
                 description.set("跨平台 Agent Harness 核心 — ReAct 循环 / 平台抽象层 / 工具协议")
-                url.set("https://github.com/WowBlueStudio/MengPaw-Harness")
+                url.set("https://github.com/WowBlueStudio/MengPaw-harness")
                 licenses {
                     license {
                         name.set("AGPL-3.0-or-later OR LicenseRef-Commercial")
