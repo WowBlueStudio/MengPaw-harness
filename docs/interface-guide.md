@@ -8,7 +8,7 @@
 
 ```
 宿主 (Android / CLI / 桌面 / Web)
-  │  ① 构造 HarnessEnv          ← 平台能力：文件系统/路径/时间/日志/确认门
+  │  ① 构造 HarnessEnv          ← 平台能力：文件系统/路径/时间/日志/确认门/检查点
   │  ② 构造 HarnessToolInvoker  ← 领域能力：工具怎么执行
   ▼
 Harness 核心 (ReAct 循环)
@@ -31,6 +31,7 @@ Harness 核心 (ReAct 循环)
 | `HarnessLogger` | `HarnessEnv.kt` 内 | 日志出口（对接平台日志） | 宿主 |
 | `HarnessConfirmGate` | `HarnessConfirmGate.kt` | 高危操作二次确认（fail-closed） | 宿主（**必做**） |
 | `HarnessToolInvoker` | `HarnessToolInvoker.kt` | 工具执行协议 | 宿主 |
+| `CheckpointStore` | `HarnessCheckpoint.kt` | 循环状态持久化（断点续跑） | 宿主（内存 / 文件参考实现可直接用） |
 
 参考实现（JVM/Android 通用，可直接用）：`com.mengpaw.harness.jvm.JvmHarnessFileSystem`、
 `com.mengpaw.harness.jvm.JvmHarnessClock`、`BaseDirPathResolver`、`ConsoleHarnessLogger`、
@@ -107,6 +108,19 @@ class MyToolInvoker : HarnessToolInvoker {
 - 不含 `HarnessToolInvoker`——见 §0 两轴分离。
 - 新增平台能力时扩展本类，**不要**新增全局单例（否则同进程无法跑两个独立实例）。
 
+### 3.7 `CheckpointStore`（v0.2.0 新增）⚠️ 安全相关
+- 定位：平台能力（"循环状态存到哪"），经 `HarnessEnv.checkpoints` 注入 —— 与 `HarnessFileSystem` 同层。
+- 三态 `CheckpointStatus`：`RUNNING`（可续）/ `COMPLETED` / `FAILED`（终态）。
+  **只有 `RUNNING` 会被 `ReActEngine.run(resume = true)` 接续** —— 终态续跑无意义，
+  该重跑还是该丢弃由宿主策略决定。
+- 异常契约：`load` 取不到（不存在 / 损坏）返回 `null` 不抛；`save` / `clear` 失败可抛
+  —— 引擎会吞掉异常并继续主任务（**检查点不是新的失败点**），异常经 `onCheckpointError` 上报。
+- 实现必须线程安全（同会话可能被并发读写）。
+- **`sessionId` 用在路径 / 键拼接前必须消毒**：`FileCheckpointStore.pathFor(id)` 是推荐入口
+  （点号一并替换，`..` 无法存活）。宿主自建落盘实现必须自行消毒 —— 这是目录穿越防线。
+- 参考实现：`InMemoryCheckpointStore`（默认，进程内）/ `FileCheckpointStore`（JSON 落盘，
+  通常接 `paths.checkpointDir`；经 `HarnessFileSystem`，零平台类型）。
+
 ## 4. 常见任务
 
 **新增一项平台能力**（如"剪贴板""设备信息"）
@@ -122,24 +136,45 @@ class MyToolInvoker : HarnessToolInvoker {
 3. `HarnessToolInvoker` 决定工具形态（命令行进程 / 内置函数表）；
 4. 不要为了跑通而把 `confirmGate` 换成"永远允许"——那是安全漏洞。
 
-**迁移一个核心模块进来**（B 阶段进行中）
+**接入断点续跑**（v0.2.0）
+1. 选存储：进程内恢复用默认 `InMemoryCheckpointStore`；跨进程 / 崩溃恢复用
+   `FileCheckpointStore(env.fileSystem, env.paths.checkpointDir)`，写进 `HarnessEnv.checkpoints`；
+2. 引擎侧传 `checkpointStore = env.checkpoints`（+ 稳定的 `sessionId`）——不传即不写检查点，行为不变；
+3. 恢复入口 `engine.run(task, resume = true)`；只有 `RUNNING` 会被接续；
+4. 任务确认完成后 `engine.clearCheckpoint()`，避免下次误续旧状态；
+5. 检查点写失败不中断任务，但要接 `onCheckpointError` 让失败可见（默认静默）。
+
+**搬运一个核心模块进来**（B 阶段进行中）
 见 `docs/migration-roadmap.md`：一次一个包，搬完立刻跑 `./gradlew check`，绿了才继续。
 
 ## 5. 硬约束（违反即构建失败或安全事故）
 
 | 约束 | 强制方式 |
 |---|---|
-| 核心源码不得 import `java.*` / `javax.*` / `android.*` / `androidx.*` / `dalvik.*` | `verifyNoPlatformTypes` 门禁 |
+| 核心源码不得 import `java.*` / `javax.*` / `android.*` / `androidx.*` / `dalvik.*` | `verifyNoPlatformTypes` 门禁（**覆盖核心全部子包** `engine`/`tool`，仅排除 `.jvm`） |
 | 新建 `.kt`/`.kts` 必须带 SPDX 双许可头 | 项目红线 |
 | 禁止 `!!` 强制解包；文件 IO 必须 try/catch | 项目红线 |
 | 单文件 ≤ 400 行 | 项目红线 |
 | **禁止把 API Key 写进日志/审计/用户可见文本** | 项目红线（唯一安全禁区） |
 | 确认门不得"永远允许" | 安全审计 |
+| 落盘键（`sessionId`）拼路径前必须消毒 | 安全审计（`FileCheckpointStore` 已内置） |
 
 ## 6. 当前状态与未完成项
 
-- ✅ A 阶段：抽象层落位（本仓库），MengPaw kernel 已接入注入点，663 用例全绿。
-- ⏳ B 阶段：核心逻辑搬运中（`llm` 纯逻辑 / `cli` / `session` 优先）。
-- ⚠️ 已知缺口：`LlmProvider` 尚未搬入；当前消息类型为 `List<Map<String, String>>`，
-  搬入时应升级为 `@Serializable` data class。
+- ✅ **A 阶段**：抽象层落位（2026-08-21），kernel 已接入注入点，665 内核用例全绿。
+- ✅ **抽象层单一事实源**（2026-09-18，v0.2.0）：kernel 内联副本 `com.mengpaw.kernel.harness`
+  已删除，宿主统一经 `com.mengpaw.harness.*`；kernel 侧仅留 `KernelHarnessEnv.default()` 适配器
+  （承接原 `HarnessEnv.fromKernelGlobals()`）。两副本此前已实测漂移 —— `HarnessToolRequest.ofRaw`
+  的空值处理、`DirectoryNames.socket` 目录名两侧不一致。
+- ✅ **`llm` 包已搬入**：`com.mengpaw.kernel.llm.*`（`LlmProvider` / `AdaptiveLlmProvider` / SSE /
+  `ReActParser` / `LoopDetector` / 限速 / 翻译中间件等 17 文件）归本仓库，kernel 内实现已删除。
+  （v0.1.x 文档曾写"`LlmProvider` 尚未搬入" —— 那是过期陈述，本版更正。）
+- 🆕 **v0.2.0 能力**：`CheckpointStore` 断点续跑（§3.7）；`verifyNoPlatformTypes` 覆盖面
+  从"顶层文件"扩到**核心全部子包**。
+- ⏳ **B 阶段剩余**：`cli` / `session` / ReAct 骨架；`AgentEngine` 主循环仍在 kernel，
+  `ReActEngine` 尚未接管 MengPaw 主链路（C 阶段）。
+- ⚠️ 真实缺口：消息类型仍是 `List<Map<String, String>>`，搬 `session` 时应升级为
+  `@Serializable` data class（协议稳定性要求）。
+- ⚠️ 门禁边界：只匹配 `import` 语句，全限定引用（如 `System.currentTimeMillis()`）抓不到 ——
+  新增平台调用请自觉走 `HarnessEnv` 注入。
 - 📌 发布纪律：本仓库 tag / JitPack 发布**需用户明确指令**，不得自行发版。

@@ -55,7 +55,7 @@ ReActEngine  ── 思考 → 行动 → 观察 循环
 
 | 包 | 内容 |
 |---|---|
-| `com.mengpaw.harness` | 平台抽象层：`HarnessEnv` / `HarnessFileSystem` / `HarnessPathResolver` / `HarnessClock` / `HarnessLogger` / `HarnessConfirmGate` / `HarnessToolInvoker` |
+| `com.mengpaw.harness` | 平台抽象层：`HarnessEnv` / `HarnessFileSystem` / `HarnessPathResolver` / `HarnessClock` / `HarnessLogger` / `HarnessConfirmGate` / `HarnessToolInvoker` / **检查点：`CheckpointStore`（+ 内存 / 文件两种实现）** |
 | `com.mengpaw.harness.engine` | `ReActEngine` 循环 / `PromptBuilder` 提示词 / `Conversation` 会话契约 |
 | `com.mengpaw.harness.tool` | `HarnessTool` 协议 / `ToolRegistry` 注册表 / `BuiltinTools` 内置工具 |
 | `com.mengpaw.kernel.llm` | 模型层：`LlmProvider` 接口 / `AdaptiveLlmProvider` HTTP 实现 / SSE 流解析 / ReAct 解析器 / 循环检测 |
@@ -240,11 +240,42 @@ Agent 若需要该能力，应**向用户说明理由并请用户开启**——�
 | 有界并行 | 模型一轮吐几十个 Action 击穿上游 → 单批默认最多 8 路并发 |
 | 观察不可信 | 工具输出里含"请执行某操作"的注入文本 → 提示词层声明 Observation 是数据非指令 |
 | 确认门 fail-closed | 无 UI 宿主（后台 / 无人值守）→ 高危操作一律拒绝，不静默放行 |
+| 断点续跑 | 长任务中断 / 进程重启 → 每步落检查点，`run(task, resume = true)` 接着跑；检查点写失败不中断主任务 |
+
+## 断点续跑（CheckpointStore）
+
+长任务（几十步的调研 / 批量处理）最怕"跑到第 15 步崩了，只能从头再来"。注入一个
+`CheckpointStore` 即可：每步落一次 `RUNNING` 检查点，中断后用 `resume = true` 续跑。
+
+```kotlin
+// 跨进程恢复用文件实现（落点在 checkpointDir）；进程内恢复用默认 InMemoryCheckpointStore
+val store = FileCheckpointStore(env.fileSystem, env.paths.checkpointDir)
+val engine = ReActEngine(llm, tools, checkpointStore = store, sessionId = "daily-report")
+
+val result = engine.run("生成今日报表并归档", resume = true)  // 有 RUNNING 检查点就接着跑
+```
+
+契约要点：
+
+- **只有 `RUNNING` 可续**：`COMPLETED` / `FAILED` 是终态，续跑无意义 — 该重跑还是该丢弃由宿主策略决定。
+- **续跑不重复追加任务**：历史与起始步数取自检查点，模型不会看到重复的任务描述。
+- **检查点失败不是新的失败点**：磁盘满 / 权限不足时任务照跑，异常经 `onCheckpointError` 上报
+  （默认静默）；`load` 取不到或档损坏一律按"无检查点"处理。
+- **会话 id 消毒**：`sessionId` 拼路径前先消毒（点号一并替换，`..` 无法存活），不会逃出检查点
+  目录；宿主自行拼路径时必须复用 `FileCheckpointStore.pathFor`。
+- 只存"恢复循环所需"：任务、步数、状态、完整消息序列、终止原因、最终答复；循环内的启发式计数
+  （连续失败数等）不存 — 重跑时重新累积即可，存了是伪精确。
 
 ## 与 MengPaw 的关系
 
 MengPaw（Android 微内核 Agent 框架）是本库的**主要宿主**，经 Gradle composite build
 共享同一份源码（单一事实源，两边共同演进）。本库不反向依赖 MengPaw 的任何代码。
+
+**抽象层单一事实源（v0.2.0 起）**：MengPaw kernel 里曾有一份内联副本
+（`com.mengpaw.kernel.harness`），已删除 —— 两份副本各自演进必然漂移，实测已出现
+`ofRaw` 空值处理与 socket 目录名的语义分叉。现在抽象层只此一处，kernel 侧仅保留
+`KernelHarnessEnv.default()` 适配器（把 `DataPaths` / `KernelLog` / `UserConfirmBus`
+三个既有单例组装成 `HarnessEnv`，保证「未显式注入」行为与改造前一致）。
 
 | 抽象 | MengPaw 侧实现 |
 |---|---|
@@ -252,6 +283,7 @@ MengPaw（Android 微内核 Agent 框架）是本库的**主要宿主**，经 Gr
 | `HarnessPathResolver` | 中文目录布局 + 消毒规则 |
 | `HarnessConfirmGate` | 弹窗确认总线 |
 | `HarnessToolInvoker` | CLI 命令管线 |
+| `CheckpointStore` | 内存默认（待接：会话检查点目录落盘） |
 
 ## 许可
 

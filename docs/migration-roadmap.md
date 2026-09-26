@@ -8,9 +8,23 @@
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | A | 平台抽象层落位 — 接口定义 + kernel 适配器 + ReAct 主链路注入点 | ✅ 完成 (2026-08-21) |
-| B | 本仓库接收核心逻辑 — 按包搬运, 每搬一个包跑通编译与测试 | ⏳ 进行中 |
-| C | 宿主接入方式切换 — MengPaw 经 `includeBuild` 消费本仓库, kernel 内联实现下线 | ⬜ 未开始 |
+| B | 本仓库接收核心逻辑 — 按包搬运, 每搬一个包跑通编译与测试 | ⏳ 进行中 (`llm` 包已搬入) |
+| C | 宿主接入方式切换 — MengPaw 经 `includeBuild` 消费本仓库, kernel 内联实现下线 | ⏳ 进行中 (抽象层内联副本已下线, 2026-09-18) |
 | D | 第二宿主验证 — 至少一个非 Android 宿主 (CLI/桌面) 实跑 | ⬜ 未开始 |
+| E | 续跑能力 — `CheckpointStore` 断点续跑 (v0.2.0, 独立于搬运进度) | ✅ 完成 (2026-09-18) |
+
+## C 阶段已完成的部分 (2026-09-18)
+
+- kernel 经 `settings.gradle.kts` 的 `includeBuild("harness")` + `dependencySubstitution`
+  消费本仓库, 坐标与远端 JitPack **逐字符一致**。
+- **kernel 内联抽象层副本已删除** (`com.mengpaw.kernel.harness`, 7 文件) —
+  宿主统一 import `com.mengpaw.harness.*`; kernel 侧只保留 `HarnessKernelAdapters.kt`
+  (`KernelLogBridge` / `KernelConfirmGate` / `CliPipelineToolInvoker` / `KernelHarnessEnv`)。
+- 收敛动因: 两份副本各自演进已实测漂移 —— `HarnessToolRequest.ofRaw` 对空 raw 的处理
+  (kernel 存 `""`, 本仓库返回 `null`)、`DirectoryNames.socket` 的目录名间接层只在本仓库存在。
+  留着必然在下一次改动里再分叉。
+- 剩余: ReAct 骨架 (`AgentEngine` 主循环) 仍由 kernel 承担, 本仓库 `ReActEngine`
+  尚未接管 MengPaw 主链路 —— 那是 C 阶段的后半场。
 
 ## A 阶段已完成
 
@@ -30,7 +44,7 @@ MengPaw 主仓库 (`mengpaw-kernel`) 内:
 
 | 目标包 | 文件 | 主要障碍 | 优先级 |
 |---|---|---|---|
-| `llm` ReAct 纯逻辑 (`ReActParser` / `ReActTypes` / `LoopDetector` / `SseStreamParser` / `ReasoningExtractor`) | ~6 | 无 — 纯逻辑, 可立即搬 | P0 |
+| ~~`llm` ReAct 纯逻辑~~ | ~6 | ✅ **已搬入** (含 `AdaptiveLlmProvider` / HTTP / SSE / 限速, 共 17 文件) | 完成 |
 | `cli` 解析器 + `CommandRegistry` | ~11 | 依赖 `plugin` 包 (插件命名空间), 需抽出 `ToolRegistry` 接口 | P0 |
 | `session` (`Session` / `SessionManager` / 压缩) | ~10 | `Message`/`Session` 数据模型需可序列化; 压缩阶段调 LLM (已是接口) | P0 |
 | ReAct 骨架 (`AgentReActLoop` / `AgentReActStepProcessor` / `AgentToolRunner`) | ~3 | 依赖 `agent.AgentDocs` (记忆) / `evolution` / `security` — 均需接口化 | P1 |
