@@ -58,9 +58,13 @@ dependencies {
 /**
  * 跨平台铁律门禁 — harness 核心源码禁止引用任何平台类型。
  *
- * 只检查接口层 (`com/mengpaw/harness` 顶层); `.jvm` 子包是**平台实现**,
- * 允许 (且必须) 引用 java.*。任何新增的核心文件一旦引入平台依赖, 本门禁失败,
- * 从而防止"抽象层被慢慢腐蚀回平台绑定"这一最常见的退化路径。
+ * 覆盖核心目录 (`com/mengpaw/harness`) 的**全部子包** (engine / tool 等), 只排除
+ * `.jvm` 子包 — 那是平台实现的正规归属地, 允许 (且必须) 引用 java.*。
+ * 任何新增的核心文件一旦引入平台依赖, 本门禁失败, 从而防止"抽象层被慢慢腐蚀回
+ * 平台绑定"这一最常见的退化路径。
+ *
+ * 已知边界: 本门禁只查 `import` 语句, 全限定引用 (如 `System.currentTimeMillis()`)
+ * 不会被抓到 — 新增平台调用时请自觉走 `HarnessEnv` 注入。
  */
 val verifyNoPlatformTypes by tasks.registering {
     group = "verification"
@@ -68,16 +72,18 @@ val verifyNoPlatformTypes by tasks.registering {
     val coreDir = layout.projectDirectory.dir("src/main/kotlin/com/mengpaw/harness")
     inputs.dir(coreDir)
     doLast {
-        // 接口层文件 = 核心目录下直接子文件 (排除 jvm 等平台实现子包)
         val forbidden = Regex("""^\s*import\s+(java|javax|android|androidx|dalvik)\.""")
-        val offenders = coreDir.asFile.listFiles()
-            .orEmpty()
+        val offenders = coreDir.asFile.walkTopDown()
             .filter { it.isFile && it.extension == "kt" }
+            .filterNot { it.parentFile?.name == "jvm" }
             .flatMap { file ->
                 file.readLines().withIndex()
                     .filter { (_, line) -> forbidden.containsMatchIn(line) }
-                    .map { (idx, line) -> "${file.name}:${idx + 1}: ${line.trim()}" }
+                    .map { (idx, line) ->
+                        "${file.relativeTo(coreDir.asFile).path}:${idx + 1}: ${line.trim()}"
+                    }
             }
+            .toList()
         if (offenders.isNotEmpty()) {
             throw GradleException(
                 "harness 核心出现平台类型引用 (违反跨平台铁律):\n  " + offenders.joinToString("\n  ")
