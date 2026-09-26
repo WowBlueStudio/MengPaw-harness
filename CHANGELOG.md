@@ -8,6 +8,36 @@ JitPack 坐标：`com.github.WowBlueStudio:MengPaw-harness:<tag>`
 
 ---
 
+## v0.2.0 (2026-09-18) — 检查点续跑能力 + 抽象层单一事实源
+
+### 新增
+- **检查点与断点续跑**:
+  - `CheckpointStore` 接口 (平台能力, 经 `HarnessEnv.checkpoints` 注入) +
+    `Checkpoint` / `CheckpointStatus` / `CheckpointMessage` 模型。
+  - `InMemoryCheckpointStore` (默认, 进程内) 与 `FileCheckpointStore`
+    (JSON 落盘, 经 `HarnessFileSystem`, 参考接法 `FileCheckpointStore(env.fileSystem, env.paths.checkpointDir)`)。
+  - `ReActEngine` 接线: 每步落 RUNNING 检查点, 终止时落 COMPLETED / FAILED;
+    `run(task, resume = true)` 从 RUNNING 检查点恢复历史与步数 (不重复追加任务);
+    新增 `checkpoint()` / `clearCheckpoint()` 供宿主巡检与清理。
+  - **检查点失败不中断主任务** (磁盘满/权限不足时任务照跑), 异常经 `onCheckpointError` 上报, 默认静默。
+- **会话 id 消毒** (`sanitizeCheckpointId`): 点号一并替换, `../../` 无法存活 —
+  落盘实现拼路径前必调, 防目录穿越。
+
+### 变更
+- `HarnessEnv` 新增 `checkpoints` 字段 (带默认值, 源码兼容); 默认内存实现,
+  `jvmDefault` 行为不变 (要跨进程恢复需显式传 `FileCheckpointStore`)。
+- `verifyNoPlatformTypes` 门禁**覆盖核心全部子包** (`engine` / `tool`), 仅排除 `.jvm`;
+  此前只查顶层文件, 存在退化盲区。
+- 测试 44 → **56 用例** (新增 `CheckpointStoreTest` 6 + `ReActCheckpointTest` 6), 全绿。
+
+### 说明
+- **抽象层单一事实源**: MengPaw kernel 内联的 `com.mengpaw.kernel.harness` 副本已删除,
+  宿主改经 `com.mengpaw.harness.*` — 两边曾是同源码的两个副本, 已实测出现语义漂移
+  (`HarnessToolRequest.ofRaw` 空值处理、`socket` 目录名), 收敛后不可能再漂。
+  kernel 侧的 `KernelHarnessEnv.default()` 承接原 `HarnessEnv.fromKernelGlobals()` 语义。
+
+---
+
 ## v0.1.1 (2026-08-21) — 发布坐标修正
 
 ### 修复
