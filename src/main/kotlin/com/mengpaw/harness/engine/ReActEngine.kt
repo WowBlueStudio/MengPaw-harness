@@ -3,6 +3,10 @@
 
 package com.mengpaw.harness.engine
 
+import com.mengpaw.harness.Checkpoint
+import com.mengpaw.harness.CheckpointMessage
+import com.mengpaw.harness.CheckpointStatus
+import com.mengpaw.harness.CheckpointStore
 import com.mengpaw.harness.HarnessToolInvoker
 import com.mengpaw.harness.HarnessToolRequest
 import com.mengpaw.kernel.llm.LlmProvider
@@ -79,6 +83,8 @@ data class AgentResult(
  *   避免长任务被硬上限打断; 有失败累积则不放宽 (防放大成本)。
  * - **退化输出拦截**: 模型卡在重复标记 (如 `<Action><Action>...`) 时不当作最终答案。
  * - **观测不可信**: Observation 作为数据回灌, 提示词层已声明其非指令性。
+ * - **断点续跑**: 注入 [CheckpointStore] 后每步落一次检查点, 长任务中断/进程重启可
+ *   用 `run(task, resume = true)` 从上次步数接着跑 (检查点失败不中断主任务)。
  *
  * @param llmProvider 模型接入 (本库自带 [com.mengpaw.kernel.llm.AdaptiveLlmProvider])
  * @param toolInvoker 工具执行入口 (可用 [com.mengpaw.harness.tool.BuiltinTools.registry])
@@ -89,6 +95,10 @@ data class AgentResult(
  * @param maxParallelTools 单批并行工具上限 (防止模型一次吐几十个 Action 击穿上游)
  * @param streaming 是否请求流式输出 (onDelta 有值时才真正生效)
  * @param clock 时间源 — 测试可注入假时钟
+ * @param checkpointStore 检查点存储; **null (默认) = 不写检查点**, 行为与旧版逐字一致。
+ *   需要断点续跑时传宿主的实现 (通常即 `env.checkpoints`)
+ * @param sessionId 会话标识 — 检查点的键; 同一 id 的多次 run 共享续跑链路
+ * @param onCheckpointError 检查点读写异常回调 (默认静默) — 落盘失败必须可见但不中断任务
  */
 class ReActEngine(
     private val llmProvider: LlmProvider,
@@ -99,7 +109,10 @@ class ReActEngine(
     private val toolTimeoutMs: Long = 60_000L,
     private val maxParallelTools: Int = 8,
     private val streaming: Boolean = true,
-    private val clock: () -> Long = { System.currentTimeMillis() }
+    private val clock: () -> Long = { System.currentTimeMillis() },
+    private val checkpointStore: CheckpointStore? = null,
+    private val sessionId: String = DEFAULT_SESSION_ID,
+    private val onCheckpointError: ((Throwable) -> Unit)? = null
 ) {
 
     private val parser = ReActParser()
@@ -122,21 +135,40 @@ class ReActEngine(
      * @param onDelta 流式正文增量
      * @param onReasoning 思维链增量 (与正文分流, 不混入 onDelta)
      * @param maxStepsOverride 本次运行覆盖最大步数
+     * @param resume true = 尝试从 [checkpointStore] 中本会话的 RUNNING 检查点续跑 —
+     *   历史与起始步数取自检查点, 不再重复追加任务; 无可用检查点则按新任务跑
      */
     suspend fun run(
         task: String,
         onStep: ((StepEvent) -> Unit)? = null,
         onDelta: ((String) -> Unit)? = null,
         onReasoning: ((String) -> Unit)? = null,
-        maxStepsOverride: Int? = null
+        maxStepsOverride: Int? = null,
+        resume: Boolean = false
     ): AgentResult {
-        conversation.add("user", task)
+        val restored = restoreResumable(resume)
+        val effectiveTask = restored?.task?.takeIf { it.isNotBlank() } ?: task
+        if (restored == null) conversation.add("user", task)
 
+        val result = runLoop(effectiveTask, restored?.step ?: 0, onStep, onDelta, onReasoning, maxStepsOverride)
+        persistTerminal(effectiveTask, result)
+        return result
+    }
+
+    /** 循环本体 — [run] 负责"恢复 + 终态落检查点", 本函数只管把循环跑完。 */
+    private suspend fun runLoop(
+        task: String,
+        startStep: Int,
+        onStep: ((StepEvent) -> Unit)?,
+        onDelta: ((String) -> Unit)?,
+        onReasoning: ((String) -> Unit)?,
+        maxStepsOverride: Int?
+    ): AgentResult {
         val originalMax = maxStepsOverride ?: maxSteps
         var effectiveMax = originalMax
         var extended = false
 
-        var step = 0
+        var step = startStep
         var consecutiveFailures = 0
         var emptyResponses = 0
         var consecutiveThoughtOnly = 0
@@ -196,6 +228,7 @@ class ReActEngine(
                 }
                 conversation.add("system", "请继续。输出 `Action: <工具名>` 与 `Action Input: <参数>`, 或直接给出 `Final Answer:`。")
                 step++
+                persistRunning(task, step)
                 continue
             }
             consecutiveThoughtOnly = 0
@@ -223,6 +256,7 @@ class ReActEngine(
 
             conversation.add("system", observations.joinToString("\n\n") { it.first })
             step++
+            persistRunning(task, step)
         }
 
         val msg = "已达最大步数 ($effectiveMax), 任务可能未完成。"
@@ -301,4 +335,113 @@ class ReActEngine(
     /** 去掉模型可能带的 `Final Answer:` 前缀 — 返回给宿主的是纯答复。 */
     private fun stripFinalPrefix(text: String): String =
         text.trim().removePrefix("Final Answer:").removePrefix("Final Answer：").trim()
+
+    // ── 检查点 (断点续跑) ─────────────────────────────────────────
+
+    /** 当前会话的检查点快照 (未配置存储时返回 null) — 供宿主巡检/展示。 */
+    suspend fun checkpoint(): Checkpoint? {
+        val store = checkpointStore ?: return null
+        return try {
+            store.load(sessionId)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            reportCheckpointError(e)
+            null
+        }
+    }
+
+    /** 清除本会话的检查点 — 任务确认完成后调用, 避免下次 resume 误续旧状态。 */
+    suspend fun clearCheckpoint() {
+        val store = checkpointStore ?: return
+        try {
+            store.clear(sessionId)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            reportCheckpointError(e)
+        }
+    }
+
+    /**
+     * 取可续跑的检查点并回灌历史。
+     *
+     * 只有 [CheckpointStatus.RUNNING] 算"可续": COMPLETED / FAILED 是终态,
+     * 续跑无意义 (该重跑还是该丢弃由宿主策略决定)。
+     */
+    private suspend fun restoreResumable(resume: Boolean): Checkpoint? {
+        if (!resume) return null
+        val store = checkpointStore ?: return null
+        val restored = try {
+            store.load(sessionId)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            reportCheckpointError(e)
+            null
+        } ?: return null
+        if (restored.status != CheckpointStatus.RUNNING) return null
+        conversation.clear()
+        restored.messages.forEach { conversation.add(it.role, it.content) }
+        return restored
+    }
+
+    /** 每步落一次 RUNNING 检查点 — 崩在这步之后即可从这里续。 */
+    private suspend fun persistRunning(task: String, step: Int) {
+        if (checkpointStore == null) return
+        persist(
+            Checkpoint(
+                sessionId = sessionId,
+                task = task,
+                step = step,
+                status = CheckpointStatus.RUNNING,
+                messages = snapshotMessages(),
+                updatedAt = clock()
+            )
+        )
+    }
+
+    /** 终态检查点 — 记完成/失败与终止原因, 供宿主判定"该续跑还是该重跑"。 */
+    private suspend fun persistTerminal(task: String, result: AgentResult) {
+        if (checkpointStore == null) return
+        persist(
+            Checkpoint(
+                sessionId = sessionId,
+                task = task,
+                step = result.steps,
+                status = if (result.completed) CheckpointStatus.COMPLETED else CheckpointStatus.FAILED,
+                messages = snapshotMessages(),
+                updatedAt = clock(),
+                terminationReason = result.terminationReason,
+                answer = result.answer
+            )
+        )
+    }
+
+    private fun snapshotMessages(): List<CheckpointMessage> =
+        conversation.messages().map { CheckpointMessage(it.first, it.second) }
+
+    /**
+     * 检查点写入**不得中断主任务**: 磁盘满 / 权限不足时任务照跑, 错误经
+     * [onCheckpointError] 上报 (默认静默) — 检查点是可靠性增强, 不是新的失败点。
+     */
+    private suspend fun persist(checkpoint: Checkpoint) {
+        val store = checkpointStore ?: return
+        try {
+            store.save(checkpoint)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            reportCheckpointError(e)
+        }
+    }
+
+    private fun reportCheckpointError(e: Throwable) {
+        onCheckpointError?.invoke(e)
+    }
+
+    companion object {
+        /** 默认会话 id — 单会话宿主无需关心。 */
+        const val DEFAULT_SESSION_ID: String = "default"
+    }
 }

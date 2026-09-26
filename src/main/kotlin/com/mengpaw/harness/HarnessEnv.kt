@@ -24,13 +24,16 @@ import com.mengpaw.harness.jvm.JvmHarnessFileSystem
  * @param clock 时间源
  * @param logger 日志出口
  * @param confirmGate 高危确认门; 无 UI 宿主应传 [DenyAllConfirmGate]
+ * @param checkpoints 检查点存储 (断点续跑); 默认内存实现 — 要跨进程恢复请传
+ *   [FileCheckpointStore] (落点通常取 `paths.checkpointDir`)
  */
 data class HarnessEnv(
     val fileSystem: HarnessFileSystem,
     val paths: HarnessPathResolver,
     val clock: HarnessClock = JvmHarnessClock,
     val logger: HarnessLogger = ConsoleHarnessLogger,
-    val confirmGate: HarnessConfirmGate = DenyAllConfirmGate
+    val confirmGate: HarnessConfirmGate = DenyAllConfirmGate,
+    val checkpoints: CheckpointStore = InMemoryCheckpointStore()
 ) {
     companion object {
         /**
@@ -39,6 +42,9 @@ data class HarnessEnv(
          * **不含确认门实现**: 需要弹窗确认的宿主必须自行注入
          * [confirmGate]; 默认的 [DenyAllConfirmGate] 会让所有高危操作被拒 —
          * 这是刻意的安全默认, 不是缺陷。
+         *
+         * 检查点同理是内存实现 (进程重启即失效); 要落盘请显式传
+         * `checkpoints = FileCheckpointStore(fileSystem, paths.checkpointDir)`。
          */
         fun jvmDefault(
             baseDir: String,
