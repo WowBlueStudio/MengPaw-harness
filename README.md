@@ -249,7 +249,7 @@ Agent 若需要该能力，应**向用户说明理由并请用户开启**——�
 
 ```kotlin
 // 跨进程恢复用文件实现（落点在 checkpointDir）；进程内恢复用默认 InMemoryCheckpointStore
-val store = FileCheckpointStore(env.fileSystem, env.paths.checkpointDir)
+val store = FileCheckpointStore(env.fileSystem, env.paths.checkpointDir, keep = 3)
 val engine = ReActEngine(llm, tools, checkpointStore = store, sessionId = "daily-report")
 
 val result = engine.run("生成今日报表并归档", resume = true)  // 有 RUNNING 检查点就接着跑
@@ -265,6 +265,24 @@ val result = engine.run("生成今日报表并归档", resume = true)  // 有 RU
   目录；宿主自行拼路径时必须复用 `FileCheckpointStore.pathFor`。
 - 只存"恢复循环所需"：任务、步数、状态、完整消息序列、终止原因、最终答复；循环内的启发式计数
   （连续失败数等）不存 — 重跑时重新累积即可，存了是伪精确。
+
+### `FileCheckpointStore` 的命名与保留契约
+
+- **命名（每步一档）**：`{dir}/{sessionId 消毒后}__step_{step}.json` — **双下划线**分隔，
+  于是"分隔符"与会话 id 内部的下划线可辨（`lastIndexOf("__step_")` 从右侧切，id 自身含
+  `__step_` 也能切对）。
+- **`listSessionIds()` 精确解析，不再 `removeSuffix` 猜**：会话 id 取自解析出的文件名键，
+  同一会话的多份步数档归并为一个 id。`removeSuffix(".json")` 那种猜法会把"id 本身以 `.json`
+  结尾"或"目录里混入的任意 `*.json`"误当成会话，且无法归并多份档 —— 已弃用。
+- **`load` 的定位规则**：扫目录 → 文件名精确解析出 `(键, 步)` → 解析 JSON → **只有
+  `checkpoint.sessionId == 请求的 sessionId` 才采纳**（内容权威，文件名只做定位：消毒是有损映射，
+  `a.b` 与 `a_b` 同形，逆推不可行）。于是会话 `a` 与 `ab` 互不污染。
+- **保留策略 `keep`，默认 `0` = 不清理**（与引入该参数前的行为逐字一致，向后兼容）；
+  需要控制磁盘占用的宿主显式传 `keep = 3`。清理使用**文件系统时间戳 + 步数**排序
+  （不读档内 `updatedAt` —— 为清理再解析一遍全部档不划算，"最近写入"在时序上与它单调一致），
+  且**永不动刚写入的那份**：删除一律发生在新档落盘之后，于是任意时刻至少有一份完整档可读
+  （抽象层无 move 语义时的原子性替代）。
+- **旧格式单档 `{dir}/{sessionId 消毒后}.json` 仍可读**（兼容），但新写入一律带步数后缀。
 
 ## 与 MengPaw 的关系
 
@@ -283,7 +301,7 @@ MengPaw（Android 微内核 Agent 框架）是本库的**主要宿主**，经 Gr
 | `HarnessPathResolver` | 中文目录布局 + 消毒规则 |
 | `HarnessConfirmGate` | 弹窗确认总线 |
 | `HarnessToolInvoker` | CLI 命令管线 |
-| `CheckpointStore` | 内存默认（待接：会话检查点目录落盘） |
+| `CheckpointStore` | kernel 侧的 `session/CheckpointManager`（自管目录与保留策略，复用本库的 `CheckpointStatus` 枚举） |
 
 ## 许可
 

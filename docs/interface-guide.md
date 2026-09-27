@@ -120,6 +120,20 @@ class MyToolInvoker : HarnessToolInvoker {
   （点号一并替换，`..` 无法存活）。宿主自建落盘实现必须自行消毒 —— 这是目录穿越防线。
 - 参考实现：`InMemoryCheckpointStore`（默认，进程内）/ `FileCheckpointStore`（JSON 落盘，
   通常接 `paths.checkpointDir`；经 `HarnessFileSystem`，零平台类型）。
+- **`FileCheckpointStore` 命名与 `listSessionIds()` 契约**（2026-09-27 补齐）：
+  - 每步一档：`{dir}/{消毒 id}__step_{n}.json`（**双下划线**分隔，与 id 内部下划线可辨；
+    从右侧 `lastIndexOf("__step_")` 切分，id 自身含 `__step_` 也能切对）。
+    旧格式单档 `{dir}/{消毒 id}.json` **仍可读**（解析为步数 `-1`，排序最旧），但不再写入。
+  - `load` **以内容为权威**：扫目录 → 文件名精确解析出 `(键, 步)` → 解析 JSON →
+    只有 `checkpoint.sessionId == 请求的 id` 才采纳。文件名只做定位 ——
+    消毒是有损映射（`a.b` 与 `a_b` 同形），逆推不可行；因此 id `a` 与 `ab` 互不污染。
+  - `listSessionIds()` 取**解析出的文件名键**（内容不可用时也能枚举），同一会话的多份步数档
+    归并为一个 id。早期用 `removeSuffix(".json")` 猜 id 的做法已弃用：它会把"id 本身以
+    `.json` 结尾"或目录里混入的任意 `*.json` 误当成会话。
+  - **保留策略 `keep`，默认 `0` = 不清理**（与引入该参数前逐字一致，向后兼容）；
+    显式传 `keep = N` 才裁剪。清理按**文件系统时间戳 + 步数**排序（不读档内 `updatedAt`），
+    并**永不删除刚写入的那份**：删除一律在新档落盘之后 —— 抽象层无 move 语义时的原子性替代，
+    任意时刻至少一份完整档可读。
 
 ## 4. 常见任务
 
@@ -177,4 +191,9 @@ class MyToolInvoker : HarnessToolInvoker {
   `@Serializable` data class（协议稳定性要求）。
 - ⚠️ 门禁边界：只匹配 `import` 语句，全限定引用（如 `System.currentTimeMillis()`）抓不到 ——
   新增平台调用请自觉走 `HarnessEnv` 注入。
+- 📌 **本次未改版本线，未 tag**（2026-09-27）：本轮只把 `FileCheckpointStore` 的**保留策略
+  `keep`**（默认 0 = 不清理）与 **`listSessionIds()` 精确解析**补齐并写进契约（§3.7），
+  版本号仍为 **v0.2.0**（与本仓库 `build.gradle.kts` 一致），没有新 tag、没有 JitPack 发布 ——
+  发布需用户明确指令。宿主侧影响：默认行为不变（`keep` 默认不清理），只有显式传 `keep` 的宿主
+  才会看到旧档被裁剪；`listSessionIds()` 的返回值更准（不再返回 `*.json` 误判项）。
 - 📌 发布纪律：本仓库 tag / JitPack 发布**需用户明确指令**，不得自行发版。

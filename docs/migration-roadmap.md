@@ -11,7 +11,25 @@
 | B | 本仓库接收核心逻辑 — 按包搬运, 每搬一个包跑通编译与测试 | ⏳ 进行中 (`llm` 包已搬入) |
 | C | 宿主接入方式切换 — MengPaw 经 `includeBuild` 消费本仓库, kernel 内联实现下线 | ⏳ 进行中 (抽象层内联副本已下线, 2026-09-18) |
 | D | 第二宿主验证 — 至少一个非 Android 宿主 (CLI/桌面) 实跑 | ⬜ 未开始 |
-| E | 续跑能力 — `CheckpointStore` 断点续跑 (v0.2.0, 独立于搬运进度) | ✅ 完成 (2026-09-18) |
+| E | 续跑能力 — `CheckpointStore` 断点续跑 (v0.2.0, 独立于搬运进度) | ✅ 完成 (2026-09-18；契约补齐 2026-09-27, 版本线未动) |
+
+## E 阶段: 续跑能力的现状 (核对于 2026-09-27)
+
+- ✅ 已交付: `CheckpointStore` 接口 + `InMemoryCheckpointStore` / `FileCheckpointStore` 两实现 +
+  `ReActEngine` 接线 (`checkpointStore` + `sessionId`, 每步落 `RUNNING`, 终态落 `COMPLETED`/`FAILED`,
+  `run(task, resume = true)`), 门禁覆盖核心全部子包。
+- ✅ 契约补齐 (2026-09-27, **未改版本线、未 tag**): `FileCheckpointStore` 的**保留策略 `keep`**
+  与 **`listSessionIds()` 精确解析** (弃用 `removeSuffix` 猜 id) 写进 `docs/interface-guide.md` §3.7。
+- ⚠️ **MengPaw 主链路未消费本仓库的 `CheckpointStore`**: kernel 侧仍是自管的
+  `session/CheckpointManager` (档名 `{消毒 id}__step_{n}.json`, 自带保留策略与墓碑清除),
+  两边落盘契约不同 —— 本仓库 `save` 允许抛异常并由引擎吞掉, kernel 侧要求写失败一律吞并上报。
+  当前**只共享状态枚举** `com.mengpaw.harness.CheckpointStatus` (唯一来源, 避免两套同名三态)。
+  另一处刻意不同: kernel `CheckpointManager.listSessions()` **优先取档内 `sessionId` 字段**
+  (内容权威, 才能还原含中文/点号的真实 id), 解析失败才用文件名键兜底;
+  本仓库 `listSessionIds()` 只给文件名键 (有损)。两边取舍不同, 抄的时候别串。
+  统一存储实现属于 C 阶段后半场 (ReAct 骨架搬入时一并处理), 不要为了"看起来统一"去改一侧的档名。
+- ⚠️ 本仓库 `listSessionIds()` 返回的是**消毒后的文件名键** (有损, 例如 `a.b` → `a_b`),
+  只可用于枚举/巡检, **不可反向当作会话 id 去拼路径或查档** —— 需要精确 id 请宿主自行记录。
 
 ## C 阶段已完成的部分 (2026-09-18)
 
