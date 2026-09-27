@@ -27,7 +27,8 @@ import kotlinx.serialization.json.Json
  * ## 保留策略
  * [save] 之后清理同会话旧档, 使该会话最多留 [keep] 份。
  * `keep = 0` (默认) = **不清理**, 与引入本参数前的行为逐字一致 (向后兼容);
- * 需要控制磁盘占用的宿主显式传 `keep = 3` (与 MengPaw kernel 侧一致)。
+ * 需要控制磁盘占用的宿主显式传 `keep = 3` (与 MengPaw kernel 侧
+ * `CheckpointManager.DEFAULT_KEEP_COUNT = 3` 对齐)。
  * 清理排序用**文件系统时间戳 + 步数** (不读档内 `updatedAt` — 为清理再解析一遍全部档不划算),
  * 而"最近写入"在时序上与 `updatedAt` 单调一致; 步数是兜底 (同一毫秒内多次落盘时仍取最新步)。
  * 删除一律发生在"新档已落盘"之后, 且**永不动刚写入的那份** → 任意时刻至少有一份完整档。
@@ -40,7 +41,7 @@ import kotlinx.serialization.json.Json
  *
  * @param fileSystem 文件系统抽象 (由宿主注入)
  * @param dir 检查点目录 (通常取 `HarnessPathResolver.checkpointDir`)
- * @param keep 保留份数 (按 `updatedAt` 保留最近 N 份); 0 = 不自动清理 (向后兼容默认)
+ * @param keep 保留份数 (按文件系统时间戳 + 步数保留最近 N 份); 0 = 不自动清理 (向后兼容默认)
  * @param json 序列化器; 默认宽松解析 (忽略未知字段), 便于协议演进后读旧档
  */
 class FileCheckpointStore(
