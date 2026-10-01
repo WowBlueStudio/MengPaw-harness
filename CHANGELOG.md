@@ -8,6 +8,22 @@ JitPack 坐标：`com.github.WowBlueStudio:MengPaw-harness:<tag>`
 
 ---
 
+## v0.2.1 (2026-09-27) — FileCheckpointStore 保留策略与会话 id 精确解析
+
+### 新增
+- `FileCheckpointStore` 新增 `keep` 保留策略: `keep = 0`(默认) = **不做保留期裁剪**
+  (与引入本参数前逐字节兼容); 需要控盘的宿主显式传 `keep = 3`
+  (与 MengPaw kernel 侧 `CheckpointManager.DEFAULT_KEEP_COUNT = 3` 对齐)。
+  清理按"文件系统时间戳 + 步数"排序, 且**永不动刚写入的那份** → 任意时刻至少一份完整档。
+- `listSessionIds()` 改为按 `{id}__step_{n}.json` **精确解析**(弃用 `removeSuffix(".json")` 猜名):
+  早期单档 `{id}.json` 仍可读并与步数档归并为同一会话; `notes.json` / `report.json` 之类
+  非检查点文件不再被当成会话。
+
+### 说明
+- MengPaw kernel 侧检查点走自有 `CheckpointManager`(尚未改用本类), 两侧通过
+  `com.mengpaw.harness.CheckpointStatus` 共享三态语义。
+- 测试: harness 56 → **60** 用例, 全绿(`./gradlew check`, 含 `verifyNoPlatformTypes` 门禁)。
+
 ## v0.2.0 (2026-09-18) — 检查点续跑能力 + 抽象层单一事实源
 
 ### 新增
